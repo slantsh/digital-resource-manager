@@ -51,6 +51,9 @@ public class DatabaseConnection {
             stmt.execute(createCategoriesTable);
             stmt.execute(createResourcesTable);
 
+            // Seed default category if empty
+            stmt.execute("INSERT OR IGNORE INTO categories (id, name) VALUES (1, 'General');");
+
             stmt.close();
             conn.close();
             System.out.println("Database tables created/verified successfully.");
