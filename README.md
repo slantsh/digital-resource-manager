@@ -21,12 +21,14 @@ A clean, modern Java Swing desktop application utilizing SQLite and JDBC to stor
 ---
 
 ## 🖥️ Features
+- **User Authentication & Private Workspaces**: Secure user sign-in and account registration. Each user has their own private resources, custom categories, and favorites.
 - **Clean Swing UI**: Native Look & Feel without bloated themes or unnecessary styling hacks.
 - **Drag & Drop Import**: Drop files directly onto the drop zone or table to instantly catalog them with automatic file type detection. Drop web URLs to quickly save links.
 - **Collections & Categories**: Organize resources by custom categories with live count badges, with options to create, rename, and delete categories.
 - **Search & Filter**: Real-time search query filtering (title, description, path) alongside Resource Type and Favorites filtering.
 - **Quick Open & Reveal**: Double-click any row to open the file in its default OS viewer or launch web links in your browser. Right-click to show the containing folder on disk.
 - **Favorites (★)**: One-click favorite toggling directly from the table or context menu.
+- **Account Switching & Log Out**: Easily log out and switch users at any time from the toolbar or File menu.
 
 ---
 
@@ -56,14 +58,17 @@ digital-resource-manager/
         └── java/
             ├── Main.java                   # Program entry point & GUI launcher
             ├── model/
+            │   ├── User.java               # User account entity
             │   ├── Category.java           # Category entity
             │   ├── Resource.java           # Resource entity
             │   └── ResourceType.java       # ResourceType enum with auto-detection
             ├── database/
             │   ├── DatabaseConnection.java # SQLite connection & schema initialization
-            │   ├── CategoryDAO.java        # Category CRUD & counts
-            │   └── ResourceDAO.java        # Resource CRUD & search/filter queries
+            │   ├── UserDAO.java            # User authentication & registration
+            │   ├── CategoryDAO.java        # User-scoped Category CRUD & counts
+            │   └── ResourceDAO.java        # User-scoped Resource CRUD & search queries
             └── ui/
+                ├── LoginFrame.java         # Sign-in and account registration window
                 ├── MainFrame.java          # Main window, toolbar, sidebar & table
                 ├── DropZonePanel.java      # Visual drop area with click-to-browse
                 ├── DropTargetHandler.java  # Drag-and-drop listener for files & URLs
@@ -77,8 +82,25 @@ digital-resource-manager/
 
 ## 🚀 How to Compile and Run
 
-### Quick Run (Bash Script):
-Run the provided automated build and run script:
+### 🔑 Default Credentials
+- **Username**: `admin`
+- **Password**: `admin`
+- *(You can also click the **Create Account** tab on the sign-in screen to create new private user accounts)*
+
+### Quick Run:
+
+#### Windows (Batch - No ExecutionPolicy restriction):
+```cmd
+.\run.bat
+```
+
+#### Windows (PowerShell):
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run.ps1
+```
+*(Or run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` once to allow `.\run.ps1`)*
+
+#### Linux / macOS (Bash):
 ```bash
 ./run.sh
 ```

@@ -12,6 +12,7 @@ public class Resource {
     public String location;
     public int categoryId;
     public boolean favorite;
+    public int userId;
 
     public Resource(String title, String description, ResourceType type, String location, int categoryId, boolean favorite) {
         this.title = title;
@@ -32,6 +33,27 @@ public class Resource {
         this.favorite = favorite;
     }
 
+    public Resource(String title, String description, ResourceType type, String location, int categoryId, boolean favorite, int userId) {
+        this.title = title;
+        this.description = description;
+        this.type = type;
+        this.location = location;
+        this.categoryId = categoryId;
+        this.favorite = favorite;
+        this.userId = userId;
+    }
+
+    public Resource(int id, String title, String description, ResourceType type, String location, int categoryId, boolean favorite, int userId) {
+        this.id = id;
+        this.title = title;
+        this.description = description;
+        this.type = type;
+        this.location = location;
+        this.categoryId = categoryId;
+        this.favorite = favorite;
+        this.userId = userId;
+    }
+
     @Override
     public String toString() {
         return "Resource [id=" + id 
@@ -39,6 +61,7 @@ public class Resource {
                 + ", type=" + type 
                 + ", categoryId=" + categoryId 
                 + ", favorite=" + favorite 
-                + ", location=" + location + "]";
+                + ", location=" + location 
+                + ", userId=" + userId + "]";
     }
 }

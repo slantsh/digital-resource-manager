@@ -1,5 +1,5 @@
 import database.DatabaseConnection;
-import ui.MainFrame;
+import ui.LoginFrame;
 
 import javax.swing.*;
 import java.awt.GraphicsEnvironment;
@@ -7,7 +7,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 
 /**
- * Application entry point: initializes SQLite database and launches the Swing GUI.
+ * Application entry point: initializes SQLite database and launches the Login GUI.
  */
 public class Main {
 
@@ -24,7 +24,7 @@ public class Main {
             return;
         }
 
-        // 2. Set up database schema
+        // 2. Set up database schema and run migrations
         System.out.println("Setting up database tables...");
         DatabaseConnection.setupDatabase();
         System.out.println("Database setup complete!");
@@ -35,7 +35,7 @@ public class Main {
             return;
         }
 
-        // 4. Launch Swing GUI on Event Dispatch Thread
+        // 4. Launch Login GUI on Event Dispatch Thread
         SwingUtilities.invokeLater(() -> {
             try {
                 // Apply system look and feel for a clean native UI without heavy themes
@@ -44,9 +44,8 @@ public class Main {
                 System.err.println("Could not set system look and feel: " + e.getMessage());
             }
 
-            MainFrame frame = new MainFrame();
-            frame.setVisible(true);
+            LoginFrame loginFrame = new LoginFrame();
+            loginFrame.setVisible(true);
         });
     }
 }
-

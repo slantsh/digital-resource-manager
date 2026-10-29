@@ -9,9 +9,23 @@ import java.util.List;
 
 /**
  * Data Access Object for Resource entity.
- * Handles database operations for resources.
+ * Handles database operations for resources scoped to a specific user.
  */
 public class ResourceDAO {
+
+    private final int userId;
+
+    public ResourceDAO() {
+        this(1);
+    }
+
+    public ResourceDAO(int userId) {
+        this.userId = userId;
+    }
+
+    public int getUserId() {
+        return userId;
+    }
 
     public List<Resource> getAllResources() {
         return filterResources(null, null, null, false);
@@ -19,8 +33,9 @@ public class ResourceDAO {
 
     public List<Resource> filterResources(Integer categoryId, ResourceType type, String query, boolean favoritesOnly) {
         List<Resource> list = new ArrayList<>();
-        StringBuilder sql = new StringBuilder("SELECT id, title, description, type, location, category_id, favorite FROM resources WHERE 1=1 ");
+        StringBuilder sql = new StringBuilder("SELECT id, title, description, type, location, category_id, favorite, user_id FROM resources WHERE user_id = ? ");
         List<Object> params = new ArrayList<>();
+        params.add(userId);
 
         if (categoryId != null && categoryId > 0) {
             sql.append(" AND category_id = ?");
@@ -63,8 +78,9 @@ public class ResourceDAO {
                     String location = rs.getString("location");
                     int catId = rs.getInt("category_id");
                     boolean favorite = rs.getInt("favorite") == 1;
+                    int resUserId = rs.getInt("user_id");
 
-                    list.add(new Resource(id, title, description, resType, location, catId, favorite));
+                    list.add(new Resource(id, title, description, resType, location, catId, favorite, resUserId));
                 }
             }
         } catch (Exception e) {
@@ -75,10 +91,11 @@ public class ResourceDAO {
     }
 
     public Resource getResourceById(int id) {
-        String sql = "SELECT id, title, description, type, location, category_id, favorite FROM resources WHERE id = ?;";
+        String sql = "SELECT id, title, description, type, location, category_id, favorite, user_id FROM resources WHERE id = ? AND user_id = ?;";
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setInt(1, id);
+            pstmt.setInt(2, userId);
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
                     String title = rs.getString("title");
@@ -87,7 +104,8 @@ public class ResourceDAO {
                     String location = rs.getString("location");
                     int catId = rs.getInt("category_id");
                     boolean favorite = rs.getInt("favorite") == 1;
-                    return new Resource(id, title, description, resType, location, catId, favorite);
+                    int resUserId = rs.getInt("user_id");
+                    return new Resource(id, title, description, resType, location, catId, favorite, resUserId);
                 }
             }
         } catch (Exception e) {
@@ -97,19 +115,22 @@ public class ResourceDAO {
     }
 
     public boolean addResource(Resource res) {
-        String sql = "INSERT INTO resources (title, description, type, location, category_id, favorite) VALUES (?, ?, ?, ?, ?, ?);";
+        String sql = "INSERT INTO resources (title, description, type, location, category_id, favorite, user_id) VALUES (?, ?, ?, ?, ?, ?, ?);";
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
 
+            int targetUserId = res.userId > 0 ? res.userId : this.userId;
             pstmt.setString(1, res.title != null ? res.title : "Untitled");
             pstmt.setString(2, res.description != null ? res.description : "");
             pstmt.setString(3, res.type != null ? res.type.name() : ResourceType.PDF.name());
             pstmt.setString(4, res.location != null ? res.location : "");
             pstmt.setInt(5, res.categoryId);
             pstmt.setInt(6, res.favorite ? 1 : 0);
+            pstmt.setInt(7, targetUserId);
 
             int affected = pstmt.executeUpdate();
             if (affected > 0) {
+                res.userId = targetUserId;
                 try (ResultSet keys = pstmt.getGeneratedKeys()) {
                     if (keys.next()) {
                         res.id = keys.getInt(1);
@@ -124,7 +145,7 @@ public class ResourceDAO {
     }
 
     public boolean updateResource(Resource res) {
-        String sql = "UPDATE resources SET title = ?, description = ?, type = ?, location = ?, category_id = ?, favorite = ? WHERE id = ?;";
+        String sql = "UPDATE resources SET title = ?, description = ?, type = ?, location = ?, category_id = ?, favorite = ? WHERE id = ? AND user_id = ?;";
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
@@ -135,6 +156,7 @@ public class ResourceDAO {
             pstmt.setInt(5, res.categoryId);
             pstmt.setInt(6, res.favorite ? 1 : 0);
             pstmt.setInt(7, res.id);
+            pstmt.setInt(8, userId);
 
             return pstmt.executeUpdate() > 0;
         } catch (SQLException e) {
@@ -144,10 +166,11 @@ public class ResourceDAO {
     }
 
     public boolean deleteResource(int id) {
-        String sql = "DELETE FROM resources WHERE id = ?;";
+        String sql = "DELETE FROM resources WHERE id = ? AND user_id = ?;";
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setInt(1, id);
+            pstmt.setInt(2, userId);
             return pstmt.executeUpdate() > 0;
         } catch (SQLException e) {
             System.err.println("Error deleting resource: " + e.getMessage());
@@ -155,12 +178,27 @@ public class ResourceDAO {
         }
     }
 
+    public boolean setCategory(int id, int categoryId) {
+        String sql = "UPDATE resources SET category_id = ? WHERE id = ? AND user_id = ?;";
+        try (Connection conn = DatabaseConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, categoryId);
+            pstmt.setInt(2, id);
+            pstmt.setInt(3, userId);
+            return pstmt.executeUpdate() > 0;
+        } catch (SQLException e) {
+            System.err.println("Error moving resource: " + e.getMessage());
+            return false;
+        }
+    }
+
     public boolean setFavorite(int id, boolean favorite) {
-        String sql = "UPDATE resources SET favorite = ? WHERE id = ?;";
+        String sql = "UPDATE resources SET favorite = ? WHERE id = ? AND user_id = ?;";
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setInt(1, favorite ? 1 : 0);
             pstmt.setInt(2, id);
+            pstmt.setInt(3, userId);
             return pstmt.executeUpdate() > 0;
         } catch (SQLException e) {
             System.err.println("Error toggling favorite: " + e.getMessage());

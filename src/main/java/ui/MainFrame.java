@@ -5,6 +5,7 @@ import database.ResourceDAO;
 import model.Category;
 import model.Resource;
 import model.ResourceType;
+import model.User;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -16,6 +17,7 @@ import java.awt.dnd.DropTarget;
 import java.awt.event.*;
 import java.io.File;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +27,7 @@ import java.util.Map;
  */
 public class MainFrame extends JFrame {
 
+    private final User currentUser;
     private final CategoryDAO categoryDAO;
     private final ResourceDAO resourceDAO;
 
@@ -39,11 +42,17 @@ public class MainFrame extends JFrame {
     private JCheckBox favoritesFilterCheck;
     private JLabel statusCountLabel;
     private JLabel statusActivityLabel;
+    private int totalResourceCount;
 
     public MainFrame() {
-        super("Digital Resource Manager");
-        this.categoryDAO = new CategoryDAO();
-        this.resourceDAO = new ResourceDAO();
+        this(new User(1, "admin"));
+    }
+
+    public MainFrame(User currentUser) {
+        super("Digital Resource Manager - " + (currentUser != null ? currentUser.username : "Default"));
+        this.currentUser = currentUser != null ? currentUser : new User(1, "admin");
+        this.categoryDAO = new CategoryDAO(this.currentUser.id);
+        this.resourceDAO = new ResourceDAO(this.currentUser.id);
 
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setSize(1060, 680);
@@ -83,6 +92,11 @@ public class MainFrame extends JFrame {
 
         fileMenu.addSeparator();
 
+        JMenuItem logoutItem = new JMenuItem("Log Out...", KeyEvent.VK_L);
+        logoutItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_L, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()));
+        logoutItem.addActionListener(e -> logout());
+        fileMenu.add(logoutItem);
+
         JMenuItem exitItem = new JMenuItem("Exit", KeyEvent.VK_X);
         exitItem.addActionListener(e -> System.exit(0));
         fileMenu.add(exitItem);
@@ -96,7 +110,7 @@ public class MainFrame extends JFrame {
         editItem.addActionListener(e -> editSelectedResource());
         editMenu.add(editItem);
 
-        JMenuItem deleteItem = new JMenuItem("Delete Selected Resource", KeyEvent.VK_D);
+        JMenuItem deleteItem = new JMenuItem("Delete Selected", KeyEvent.VK_D);
         deleteItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_DELETE, 0));
         deleteItem.addActionListener(e -> deleteSelectedResource());
         editMenu.add(deleteItem);
@@ -204,6 +218,22 @@ public class MainFrame extends JFrame {
         });
         toolbar.add(refreshBtn);
 
+        toolbar.add(Box.createHorizontalStrut(12));
+        toolbar.addSeparator();
+        toolbar.add(Box.createHorizontalStrut(12));
+
+        JLabel userBadge = new JLabel("👤 " + currentUser.username);
+        userBadge.setFont(userBadge.getFont().deriveFont(Font.BOLD));
+        userBadge.setToolTipText("Active user account");
+        toolbar.add(userBadge);
+
+        toolbar.add(Box.createHorizontalStrut(8));
+
+        JButton logoutBtn = new JButton("Log Out");
+        logoutBtn.setToolTipText("Log out and switch account");
+        logoutBtn.addActionListener(e -> logout());
+        toolbar.add(logoutBtn);
+
         contentPane.add(toolbar, BorderLayout.NORTH);
 
         // 2. Center SplitPane (Categories Sidebar + Resources View)
@@ -303,10 +333,12 @@ public class MainFrame extends JFrame {
             setStatusActivity((newFav ? "Added to" : "Removed from") + " favorites: " + res.title);
         });
 
-        resourceTable = new JTable(tableModel);
+        resourceTable = new MarqueeTable(tableModel);
         resourceTable.setRowHeight(26);
-        resourceTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         resourceTable.setAutoCreateRowSorter(true);
+        resourceTable.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) updateStatusCount();
+        });
         resourceTable.getTableHeader().setReorderingAllowed(false);
 
         // Column settings
@@ -333,8 +365,8 @@ public class MainFrame extends JFrame {
             @Override
             public void mouseClicked(MouseEvent e) {
                 if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)) {
-                    int viewRow = resourceTable.getSelectedRow();
-                    if (viewRow >= 0 && resourceTable.getSelectedColumn() != 0) {
+                    int viewRow = resourceTable.rowAtPoint(e.getPoint());
+                    if (viewRow >= 0 && resourceTable.columnAtPoint(e.getPoint()) != 0) {
                         int modelRow = resourceTable.convertRowIndexToModel(viewRow);
                         Resource r = tableModel.getResourceAt(modelRow);
                         if (r != null) {
@@ -343,10 +375,26 @@ public class MainFrame extends JFrame {
                     }
                 }
             }
+
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.isPopupTrigger()) showTableContextMenu(e);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (e.isPopupTrigger()) showTableContextMenu(e);
+            }
         });
 
-        // Table context popup menu
-        initTableContextMenu();
+        // Esc clears the selection, like a file explorer
+        resourceTable.getInputMap(JComponent.WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "clearSelection");
+        resourceTable.getActionMap().put("clearSelection", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                resourceTable.clearSelection();
+            }
+        });
 
         JScrollPane tableScrollPane = new JScrollPane(resourceTable);
         mainContentPanel.add(tableScrollPane, BorderLayout.CENTER);
@@ -374,50 +422,105 @@ public class MainFrame extends JFrame {
         setContentPane(contentPane);
     }
 
-    private void initTableContextMenu() {
+    /**
+     * Builds the right-click menu for the current selection. Right-clicking an unselected row
+     * selects just that row; right-clicking inside the selection keeps it (file-explorer style).
+     */
+    private void showTableContextMenu(MouseEvent e) {
+        int row = resourceTable.rowAtPoint(e.getPoint());
+        if (row == -1) {
+            resourceTable.clearSelection();
+        } else if (!resourceTable.isRowSelected(row)) {
+            resourceTable.setRowSelectionInterval(row, row);
+        }
+
+        List<Resource> selected = getSelectedResources();
         JPopupMenu popupMenu = new JPopupMenu();
 
-        JMenuItem openItem = new JMenuItem("Open Resource");
+        if (selected.isEmpty()) {
+            JMenuItem addItem = new JMenuItem("New Resource...");
+            addItem.addActionListener(ev -> showAddResourceDialog());
+            JMenuItem importItem = new JMenuItem("Import Files...");
+            importItem.addActionListener(ev -> chooseAndImportFiles());
+            JMenuItem selectAllItem = new JMenuItem("Select All");
+            selectAllItem.setEnabled(resourceTable.getRowCount() > 0);
+            selectAllItem.addActionListener(ev -> resourceTable.selectAll());
+            popupMenu.add(addItem);
+            popupMenu.add(importItem);
+            popupMenu.addSeparator();
+            popupMenu.add(selectAllItem);
+            popupMenu.show(resourceTable, e.getX(), e.getY());
+            return;
+        }
+
+        int n = selected.size();
+        boolean single = n == 1;
+        String suffix = single ? "" : " (" + n + ")";
+
+        JMenuItem openItem = new JMenuItem(single ? "Open Resource" : "Open " + n + " Resources");
         openItem.setFont(openItem.getFont().deriveFont(Font.BOLD));
-        openItem.addActionListener(e -> {
-            Resource r = getSelectedResource();
-            if (r != null) openResource(r);
-        });
+        openItem.addActionListener(ev -> openResources(selected));
 
         JMenuItem openFolderItem = new JMenuItem("Show Containing Folder");
-        openFolderItem.addActionListener(e -> {
-            Resource r = getSelectedResource();
-            if (r != null) openContainingFolder(r);
-        });
+        openFolderItem.setEnabled(single);
+        openFolderItem.addActionListener(ev -> openContainingFolder(selected.get(0)));
 
-        JMenuItem toggleFavItem = new JMenuItem("Toggle Favorite");
-        toggleFavItem.addActionListener(e -> toggleSelectedFavorite());
+        boolean allFavorite = selected.stream().allMatch(r -> r.favorite);
+        JMenuItem favItem = new JMenuItem((allFavorite ? "Remove from Favorites" : "Add to Favorites") + suffix);
+        favItem.addActionListener(ev -> setFavorite(selected, !allFavorite));
 
-        JMenuItem editItem = new JMenuItem("Edit Details...");
-        editItem.addActionListener(e -> editSelectedResource());
-
-        JMenuItem copyPathItem = new JMenuItem("Copy Path / URL");
-        copyPathItem.addActionListener(e -> {
-            Resource r = getSelectedResource();
-            if (r != null) {
-                Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(r.location), null);
-                setStatusActivity("Copied location to clipboard: " + r.location);
+        JMenu collectionMenu = new JMenu("Add to Collection" + suffix);
+        for (Category cat : categoryDAO.getAllCategories()) {
+            JMenuItem catItem = new JMenuItem(cat.name);
+            catItem.setEnabled(!selected.stream().allMatch(r -> r.categoryId == cat.id));
+            catItem.addActionListener(ev -> moveToCategory(selected, cat));
+            collectionMenu.add(catItem);
+        }
+        collectionMenu.addSeparator();
+        JMenuItem newCollectionItem = new JMenuItem("New Collection...");
+        newCollectionItem.addActionListener(ev -> {
+            String name = JOptionPane.showInputDialog(this, "Enter name for new collection:", "New Collection", JOptionPane.PLAIN_MESSAGE);
+            if (name != null && !name.trim().isEmpty()) {
+                Category created = categoryDAO.addCategory(name.trim());
+                if (created != null) {
+                    moveToCategory(selected, created);
+                } else {
+                    JOptionPane.showMessageDialog(this, "A category with that name already exists.", "Error", JOptionPane.ERROR_MESSAGE);
+                }
             }
         });
+        collectionMenu.add(newCollectionItem);
 
-        JMenuItem deleteItem = new JMenuItem("Delete Resource");
-        deleteItem.addActionListener(e -> deleteSelectedResource());
+        JMenuItem editItem = new JMenuItem("Edit Details...");
+        editItem.setEnabled(single);
+        editItem.addActionListener(ev -> editSelectedResource());
+
+        JMenuItem copyPathItem = new JMenuItem(single ? "Copy Path / URL" : "Copy Paths / URLs" + suffix);
+        copyPathItem.addActionListener(ev -> {
+            StringBuilder sb = new StringBuilder();
+            for (Resource r : selected) {
+                if (sb.length() > 0) sb.append(System.lineSeparator());
+                sb.append(r.location);
+            }
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(sb.toString()), null);
+            setStatusActivity(single ? "Copied location to clipboard: " + selected.get(0).location
+                    : "Copied " + n + " locations to clipboard.");
+        });
+
+        JMenuItem deleteItem = new JMenuItem(single ? "Delete Resource" : "Delete " + n + " Resources");
+        deleteItem.addActionListener(ev -> deleteSelectedResource());
 
         popupMenu.add(openItem);
         popupMenu.add(openFolderItem);
         popupMenu.addSeparator();
-        popupMenu.add(toggleFavItem);
+        popupMenu.add(favItem);
+        popupMenu.add(collectionMenu);
         popupMenu.add(editItem);
         popupMenu.add(copyPathItem);
         popupMenu.addSeparator();
         popupMenu.add(deleteItem);
 
-        resourceTable.setComponentPopupMenu(popupMenu);
+        popupMenu.show(resourceTable, e.getX(), e.getY());
     }
 
     private void initGlobalDragAndDrop() {
@@ -506,9 +609,17 @@ public class MainFrame extends JFrame {
         }
 
         tableModel.setData(resources, catMap);
+        totalResourceCount = categoryDAO.getTotalResourceCount();
+        updateStatusCount();
+    }
 
-        int totalCount = categoryDAO.getTotalResourceCount();
-        statusCountLabel.setText("Total: " + totalCount + " resources | Showing: " + resources.size());
+    private void updateStatusCount() {
+        String text = "Total: " + totalResourceCount + " resources | Showing: " + tableModel.getRowCount();
+        int selectedCount = resourceTable.getSelectedRowCount();
+        if (selectedCount > 1) {
+            text += " | Selected: " + selectedCount;
+        }
+        statusCountLabel.setText(text);
     }
 
     private Resource getSelectedResource() {
@@ -518,6 +629,15 @@ public class MainFrame extends JFrame {
             return tableModel.getResourceAt(modelRow);
         }
         return null;
+    }
+
+    private List<Resource> getSelectedResources() {
+        List<Resource> list = new ArrayList<>();
+        for (int viewRow : resourceTable.getSelectedRows()) {
+            Resource r = tableModel.getResourceAt(resourceTable.convertRowIndexToModel(viewRow));
+            if (r != null) list.add(r);
+        }
+        return list;
     }
 
     private Integer getCurrentCategoryId() {
@@ -558,39 +678,80 @@ public class MainFrame extends JFrame {
     }
 
     private void deleteSelectedResource() {
-        Resource r = getSelectedResource();
-        if (r == null) {
+        List<Resource> selected = getSelectedResources();
+        if (selected.isEmpty()) {
             JOptionPane.showMessageDialog(this, "Please select a resource to delete.", "No Selection", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
 
+        String prompt = selected.size() == 1
+                ? "Are you sure you want to delete '" + selected.get(0).title + "' from the manager?"
+                : "Are you sure you want to delete these " + selected.size() + " resources from the manager?";
         int opt = JOptionPane.showConfirmDialog(this,
-                "Are you sure you want to delete '" + r.title + "' from the manager?",
+                prompt,
                 "Confirm Deletion",
                 JOptionPane.YES_NO_OPTION,
                 JOptionPane.WARNING_MESSAGE);
 
         if (opt == JOptionPane.YES_OPTION) {
-            boolean ok = resourceDAO.deleteResource(r.id);
-            if (ok) {
-                refreshCategories();
-                refreshResources();
-                setStatusActivity("Deleted: " + r.title);
+            int deleted = 0;
+            for (Resource r : selected) {
+                if (resourceDAO.deleteResource(r.id)) deleted++;
+            }
+            refreshCategories();
+            refreshResources();
+            if (deleted == selected.size()) {
+                setStatusActivity(deleted == 1 ? "Deleted: " + selected.get(0).title : "Deleted " + deleted + " resources.");
             } else {
-                JOptionPane.showMessageDialog(this, "Failed to delete resource.", "Error", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, "Failed to delete " + (selected.size() - deleted) + " resource(s).", "Error", JOptionPane.ERROR_MESSAGE);
             }
         }
     }
 
     private void toggleSelectedFavorite() {
-        Resource r = getSelectedResource();
-        if (r != null) {
-            boolean newFav = !r.favorite;
-            r.favorite = newFav;
-            resourceDAO.setFavorite(r.id, newFav);
-            tableModel.fireTableDataChanged();
-            refreshCategories();
-            setStatusActivity((newFav ? "Added to" : "Removed from") + " favorites: " + r.title);
+        List<Resource> selected = getSelectedResources();
+        if (!selected.isEmpty()) {
+            // Like a file explorer: if any item isn't a favorite, favorite them all; otherwise unfavorite all
+            boolean allFavorite = selected.stream().allMatch(r -> r.favorite);
+            setFavorite(selected, !allFavorite);
+        }
+    }
+
+    private void setFavorite(List<Resource> resources, boolean favorite) {
+        for (Resource r : resources) {
+            r.favorite = favorite;
+            resourceDAO.setFavorite(r.id, favorite);
+        }
+        if (tableModel.getRowCount() > 0) {
+            // Rows-updated (rather than data-changed) keeps the current selection intact
+            tableModel.fireTableRowsUpdated(0, tableModel.getRowCount() - 1);
+        }
+        refreshCategories();
+        String what = resources.size() == 1 ? resources.get(0).title : resources.size() + " resources";
+        setStatusActivity((favorite ? "Added to" : "Removed from") + " favorites: " + what);
+    }
+
+    private void moveToCategory(List<Resource> resources, Category category) {
+        int moved = 0;
+        for (Resource r : resources) {
+            if (resourceDAO.setCategory(r.id, category.id)) moved++;
+        }
+        refreshCategories();
+        refreshResources();
+        setStatusActivity("Added " + moved + " resource(s) to collection: " + category.name);
+    }
+
+    private void openResources(List<Resource> resources) {
+        if (resources.size() > 5) {
+            int opt = JOptionPane.showConfirmDialog(this,
+                    "Open all " + resources.size() + " selected resources?",
+                    "Open Multiple",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.QUESTION_MESSAGE);
+            if (opt != JOptionPane.YES_OPTION) return;
+        }
+        for (Resource r : resources) {
+            openResource(r);
         }
     }
 
@@ -841,6 +1002,20 @@ public class MainFrame extends JFrame {
                     JOptionPane.INFORMATION_MESSAGE);
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(this, "Failed to capture screenshot: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void logout() {
+        int opt = JOptionPane.showConfirmDialog(this,
+                "Are you sure you want to log out, " + currentUser.username + "?",
+                "Log Out Confirmation",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE);
+        if (opt == JOptionPane.YES_OPTION) {
+            dispose();
+            SwingUtilities.invokeLater(() -> {
+                new LoginFrame().setVisible(true);
+            });
         }
     }
 
