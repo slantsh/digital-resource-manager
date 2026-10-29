@@ -2,6 +2,7 @@ package ui;
 
 import database.CategoryDAO;
 import database.ResourceDAO;
+import database.TagDAO;
 import model.Category;
 import model.Resource;
 import model.ResourceType;
@@ -25,6 +26,7 @@ public class ResourceDialog extends JDialog {
     private JTextField titleField;
     private JComboBox<ResourceType> typeCombo;
     private JComboBox<Category> categoryCombo;
+    private JTextField tagsField;
     private JTextField locationField;
     private JTextArea descriptionArea;
     private JCheckBox favoriteCheckBox;
@@ -144,9 +146,29 @@ public class ResourceDialog extends JDialog {
         descriptionArea.setWrapStyleWord(true);
         formPanel.add(new JScrollPane(descriptionArea), gbc);
 
-        // Favorite
+        // Tags
+        gbc.gridx = 0;
+        gbc.gridy = 5;
+        gbc.gridwidth = 1;
+        gbc.weightx = 0;
+        gbc.weighty = 0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.anchor = GridBagConstraints.WEST;
+        formPanel.add(new JLabel("Tags:"), gbc);
+
         gbc.gridx = 1;
         gbc.gridy = 5;
+        gbc.gridwidth = 2;
+        gbc.weightx = 1.0;
+        tagsField = new JTextField(25);
+        String existingTags = String.join(", ", new TagDAO(resourceDAO.getUserId()).getTagCounts().keySet());
+        tagsField.setToolTipText("<html>Comma-separated, e.g. <b>exam, lecture, week 3</b>"
+                + (existingTags.isEmpty() ? "" : "<br>Existing tags: " + existingTags) + "</html>");
+        formPanel.add(tagsField, gbc);
+
+        // Favorite
+        gbc.gridx = 1;
+        gbc.gridy = 6;
         gbc.gridwidth = 2;
         gbc.weightx = 0;
         gbc.weighty = 0;
@@ -260,6 +282,7 @@ public class ResourceDialog extends JDialog {
         locationField.setText(r.location);
         descriptionArea.setText(r.description);
         favoriteCheckBox.setSelected(r.favorite);
+        tagsField.setText(String.join(", ", r.tags));
 
         for (int i = 0; i < categoryCombo.getItemCount(); i++) {
             Category c = categoryCombo.getItemAt(i);
@@ -290,11 +313,14 @@ public class ResourceDialog extends JDialog {
         int catId = (cat != null) ? cat.id : 1;
         String desc = descriptionArea.getText().trim();
         boolean fav = favoriteCheckBox.isSelected();
+        List<String> tags = TagDAO.parseList(tagsField.getText());
+        TagDAO tagDAO = new TagDAO(resourceDAO.getUserId());
 
         if (existingResource == null) {
             Resource newResource = new Resource(title, desc, type, location, catId, fav);
             boolean ok = resourceDAO.addResource(newResource);
             if (ok) {
+                tagDAO.setTags(newResource.id, tags);
                 saved = true;
                 dispose();
             } else {
@@ -310,6 +336,8 @@ public class ResourceDialog extends JDialog {
 
             boolean ok = resourceDAO.updateResource(existingResource);
             if (ok) {
+                tagDAO.setTags(existingResource.id, tags);
+                existingResource.tags = tags;
                 saved = true;
                 dispose();
             } else {

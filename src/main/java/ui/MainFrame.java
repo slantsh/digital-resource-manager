@@ -2,6 +2,7 @@ package ui;
 
 import database.CategoryDAO;
 import database.ResourceDAO;
+import database.TagDAO;
 import model.Category;
 import model.Resource;
 import model.ResourceType;
@@ -18,6 +19,7 @@ import java.awt.event.*;
 import java.io.File;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,10 +32,15 @@ public class MainFrame extends JFrame {
     private final User currentUser;
     private final CategoryDAO categoryDAO;
     private final ResourceDAO resourceDAO;
+    private final TagDAO tagDAO;
 
     // UI Components
     private DefaultListModel<CategoryItem> categoryListModel;
     private JList<CategoryItem> categoryList;
+    private DefaultListModel<String> tagListModel;
+    private JList<String> tagList;
+    private Map<String, Integer> tagCounts = new HashMap<>();
+    private boolean suppressTagEvents;
     private ResourceTableModel tableModel;
     private JTable resourceTable;
     private DropZonePanel dropZonePanel;
@@ -53,6 +60,7 @@ public class MainFrame extends JFrame {
         this.currentUser = currentUser != null ? currentUser : new User(1, "admin");
         this.categoryDAO = new CategoryDAO(this.currentUser.id);
         this.resourceDAO = new ResourceDAO(this.currentUser.id);
+        this.tagDAO = new TagDAO(this.currentUser.id);
 
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setSize(1060, 680);
@@ -132,6 +140,10 @@ public class MainFrame extends JFrame {
         });
         viewMenu.add(refreshItem);
 
+        JMenuItem statsItem = new JMenuItem("Statistics...", KeyEvent.VK_S);
+        statsItem.addActionListener(e -> showStatistics());
+        viewMenu.add(statsItem);
+
         // Help Menu
         JMenu helpMenu = new JMenu("Help");
         helpMenu.setMnemonic(KeyEvent.VK_H);
@@ -210,6 +222,15 @@ public class MainFrame extends JFrame {
         toolbar.add(clearSearchBtn);
 
         toolbar.add(Box.createHorizontalGlue());
+
+        JButton statsBtn = new JButton("📊");
+        statsBtn.setToolTipText("Statistics");
+        statsBtn.setMargin(new Insets(2, 6, 2, 6));
+        statsBtn.setFocusable(false);
+        statsBtn.addActionListener(e -> showStatistics());
+        toolbar.add(statsBtn);
+
+        toolbar.add(Box.createHorizontalStrut(5));
 
         JButton refreshBtn = new JButton("🔄 Refresh");
         refreshBtn.addActionListener(e -> {
@@ -305,7 +326,12 @@ public class MainFrame extends JFrame {
         catButtonsPanel.add(deleteCatBtn);
         sidebarPanel.add(catButtonsPanel, BorderLayout.SOUTH);
 
-        splitPane.setLeftComponent(sidebarPanel);
+        JSplitPane sidebarSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, sidebarPanel, initTagsPanel());
+        sidebarSplit.setResizeWeight(0.65);
+        sidebarSplit.setBorder(null);
+        sidebarSplit.setContinuousLayout(true);
+
+        splitPane.setLeftComponent(sidebarSplit);
 
         // --- Main Content (DropZone + Table) ---
         JPanel mainContentPanel = new JPanel(new BorderLayout(0, 8));
@@ -357,13 +383,24 @@ public class MainFrame extends JFrame {
         resourceTable.getColumnModel().getColumn(3).setMaxWidth(160);
         resourceTable.getColumnModel().getColumn(3).setCellRenderer(new TableRenderers.PaddedTextRenderer());
 
-        resourceTable.getColumnModel().getColumn(4).setPreferredWidth(320);
-        resourceTable.getColumnModel().getColumn(4).setCellRenderer(new TableRenderers.PaddedTextRenderer());
+        resourceTable.getColumnModel().getColumn(ResourceTableModel.COL_TAGS).setPreferredWidth(170);
+        resourceTable.getColumnModel().getColumn(ResourceTableModel.COL_TAGS).setCellRenderer(new TableRenderers.TagChipRenderer());
+
+        resourceTable.getColumnModel().getColumn(5).setPreferredWidth(260);
+        resourceTable.getColumnModel().getColumn(5).setCellRenderer(new TableRenderers.PaddedTextRenderer());
 
         // Table interaction: Double click to open
         resourceTable.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 1 && SwingUtilities.isLeftMouseButton(e)
+                        && (e.getModifiersEx() & (InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK)) == 0) {
+                    String tag = TableRenderers.TagChipRenderer.tagAt(resourceTable, e.getPoint());
+                    if (tag != null) {
+                        tagList.setSelectedValue(tag, true);
+                        return;
+                    }
+                }
                 if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)) {
                     int viewRow = resourceTable.rowAtPoint(e.getPoint());
                     if (viewRow >= 0 && resourceTable.columnAtPoint(e.getPoint()) != 0) {
@@ -491,6 +528,46 @@ public class MainFrame extends JFrame {
         });
         collectionMenu.add(newCollectionItem);
 
+        JMenu tagsMenu = new JMenu("Tags" + suffix);
+        List<Integer> ids = idsOf(selected);
+        for (String tag : tagCounts.keySet()) {
+            // Checked only when every selected resource has the tag; clicking adds it to all or removes it from all
+            boolean all = selected.stream().allMatch(r -> r.tags.stream().anyMatch(tag::equalsIgnoreCase));
+            JCheckBoxMenuItem tagItem = new JCheckBoxMenuItem(tag, tagDot(tag), all);
+            tagItem.addActionListener(ev -> {
+                if (all) {
+                    tagDAO.removeTag(ids, tag);
+                } else {
+                    tagDAO.addTag(ids, tag);
+                }
+                afterTagChange(ids, (all ? "Removed tag #" : "Added tag #") + tag + (single ? "" : " (" + n + " resources)"));
+            });
+            tagsMenu.add(tagItem);
+        }
+        if (!tagCounts.isEmpty()) {
+            tagsMenu.addSeparator();
+        }
+        JMenuItem newTagItem = new JMenuItem("New Tag...");
+        newTagItem.addActionListener(ev -> {
+            String input = JOptionPane.showInputDialog(this,
+                    "Tag name (separate several with commas):", "New Tag", JOptionPane.PLAIN_MESSAGE);
+            List<String> names = TagDAO.parseList(input);
+            if (!names.isEmpty()) {
+                for (String name : names) {
+                    tagDAO.addTag(ids, name);
+                }
+                afterTagChange(ids, "Added tag " + "#" + String.join(", #", names));
+            }
+        });
+        tagsMenu.add(newTagItem);
+        JMenuItem clearTagsItem = new JMenuItem("Remove All Tags");
+        clearTagsItem.setEnabled(selected.stream().anyMatch(r -> !r.tags.isEmpty()));
+        clearTagsItem.addActionListener(ev -> {
+            tagDAO.clearTags(ids);
+            afterTagChange(ids, "Removed all tags" + (single ? "" : " from " + n + " resources"));
+        });
+        tagsMenu.add(clearTagsItem);
+
         JMenuItem editItem = new JMenuItem("Edit Details...");
         editItem.setEnabled(single);
         editItem.addActionListener(ev -> editSelectedResource());
@@ -515,12 +592,109 @@ public class MainFrame extends JFrame {
         popupMenu.addSeparator();
         popupMenu.add(favItem);
         popupMenu.add(collectionMenu);
+        popupMenu.add(tagsMenu);
         popupMenu.add(editItem);
         popupMenu.add(copyPathItem);
         popupMenu.addSeparator();
         popupMenu.add(deleteItem);
 
         popupMenu.show(resourceTable, e.getX(), e.getY());
+    }
+
+    private JPanel initTagsPanel() {
+        JPanel panel = new JPanel(new BorderLayout(5, 5));
+        panel.setBorder(new EmptyBorder(8, 8, 8, 8));
+
+        JLabel tagHeaderLabel = new JLabel("Tags");
+        tagHeaderLabel.setFont(tagHeaderLabel.getFont().deriveFont(Font.BOLD, 12f));
+        JButton clearTagBtn = new JButton("Clear");
+        clearTagBtn.setToolTipText("Stop filtering by tag (Esc)");
+        clearTagBtn.setMargin(new Insets(0, 6, 0, 6));
+        clearTagBtn.setFocusable(false);
+        clearTagBtn.setEnabled(false);
+
+        JPanel header = new JPanel(new BorderLayout());
+        header.add(tagHeaderLabel, BorderLayout.WEST);
+        header.add(clearTagBtn, BorderLayout.EAST);
+        panel.add(header, BorderLayout.NORTH);
+
+        tagListModel = new DefaultListModel<>();
+        tagList = new JList<>(tagListModel);
+        tagList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        tagList.setToolTipText("Click a tag to show only resources with it. Right-click resources to tag them.");
+        tagList.setCellRenderer(new DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus) {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                String tag = (String) value;
+                setText("#" + tag + "  (" + tagCounts.getOrDefault(tag, 0) + ")");
+                setIcon(tagDot(tag));
+                setIconTextGap(6);
+                return this;
+            }
+        });
+        tagList.addListSelectionListener(e -> {
+            clearTagBtn.setEnabled(tagList.getSelectedValue() != null);
+            if (!e.getValueIsAdjusting() && !suppressTagEvents) {
+                refreshResources();
+            }
+        });
+        clearTagBtn.addActionListener(e -> tagList.clearSelection());
+
+        tagList.getInputMap(JComponent.WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "clearSelection");
+        tagList.getActionMap().put("clearSelection", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                tagList.clearSelection();
+            }
+        });
+
+        JPopupMenu tagPopupMenu = new JPopupMenu();
+        JMenuItem renameTagItem = new JMenuItem("Rename Tag...");
+        renameTagItem.addActionListener(e -> renameSelectedTag());
+        JMenuItem deleteTagItem = new JMenuItem("Delete Tag");
+        deleteTagItem.addActionListener(e -> deleteSelectedTag());
+        tagPopupMenu.add(renameTagItem);
+        tagPopupMenu.add(deleteTagItem);
+
+        tagList.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (SwingUtilities.isRightMouseButton(e)) {
+                    int index = tagList.locationToIndex(e.getPoint());
+                    if (index >= 0 && tagList.getCellBounds(index, index).contains(e.getPoint())) {
+                        tagList.setSelectedIndex(index);
+                        tagPopupMenu.show(tagList, e.getX(), e.getY());
+                    }
+                }
+            }
+        });
+
+        panel.add(new JScrollPane(tagList), BorderLayout.CENTER);
+        return panel;
+    }
+
+    /**
+     * A small filled circle in the tag's colour, used beside tag names in lists and menus.
+     */
+    private static Icon tagDot(String tag) {
+        Color color = TableRenderers.colorFor(tag);
+        return new Icon() {
+            @Override
+            public void paintIcon(Component c, Graphics g, int x, int y) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(color);
+                g2.fillOval(x + 1, y + 1, 8, 8);
+                g2.dispose();
+            }
+
+            @Override
+            public int getIconWidth() { return 10; }
+
+            @Override
+            public int getIconHeight() { return 10; }
+        };
     }
 
     private void initGlobalDragAndDrop() {
@@ -544,6 +718,8 @@ public class MainFrame extends JFrame {
     // --- Data loading & refresh ---
 
     public void refreshCategories() {
+        refreshTags();
+
         int selectedId = CategoryItem.ID_ALL;
         CategoryItem currentSelection = categoryList.getSelectedValue();
         if (currentSelection != null) {
@@ -578,6 +754,22 @@ public class MainFrame extends JFrame {
         categoryList.setSelectedIndex(indexToSelect);
     }
 
+    private void refreshTags() {
+        String selected = tagList.getSelectedValue();
+        tagCounts = tagDAO.getTagCounts();
+
+        // Rebuilding the list would fire selection events; the caller refreshes resources itself
+        suppressTagEvents = true;
+        tagListModel.clear();
+        for (String tag : tagCounts.keySet()) {
+            tagListModel.addElement(tag);
+            if (tag.equalsIgnoreCase(selected)) {
+                tagList.setSelectedIndex(tagListModel.size() - 1);
+            }
+        }
+        suppressTagEvents = false;
+    }
+
     public void refreshResources() {
         CategoryItem selectedCatItem = categoryList.getSelectedValue();
         Integer categoryIdFilter = null;
@@ -599,7 +791,9 @@ public class MainFrame extends JFrame {
 
         String query = searchField.getText().trim();
 
-        List<Resource> resources = resourceDAO.filterResources(categoryIdFilter, typeFilter, query, favoritesOnly);
+        String tagFilter = tagList.getSelectedValue();
+
+        List<Resource> resources = resourceDAO.filterResources(categoryIdFilter, typeFilter, query, favoritesOnly, tagFilter);
 
         // Fetch category map
         List<Category> allCategories = categoryDAO.getAllCategories();
@@ -629,6 +823,28 @@ public class MainFrame extends JFrame {
             return tableModel.getResourceAt(modelRow);
         }
         return null;
+    }
+
+    private static List<Integer> idsOf(List<Resource> resources) {
+        List<Integer> ids = new ArrayList<>();
+        for (Resource r : resources) ids.add(r.id);
+        return ids;
+    }
+
+    /**
+     * Re-selects the given resources after the table has been reloaded (those still visible).
+     */
+    private void reselectResources(Collection<Integer> ids) {
+        ListSelectionModel sm = resourceTable.getSelectionModel();
+        sm.setValueIsAdjusting(true);
+        sm.clearSelection();
+        for (int viewRow = 0; viewRow < resourceTable.getRowCount(); viewRow++) {
+            Resource r = tableModel.getResourceAt(resourceTable.convertRowIndexToModel(viewRow));
+            if (r != null && ids.contains(r.id)) {
+                sm.addSelectionInterval(viewRow, viewRow);
+            }
+        }
+        sm.setValueIsAdjusting(false);
     }
 
     private List<Resource> getSelectedResources() {
@@ -722,13 +938,70 @@ public class MainFrame extends JFrame {
             r.favorite = favorite;
             resourceDAO.setFavorite(r.id, favorite);
         }
-        if (tableModel.getRowCount() > 0) {
-            // Rows-updated (rather than data-changed) keeps the current selection intact
-            tableModel.fireTableRowsUpdated(0, tableModel.getRowCount() - 1);
-        }
         refreshCategories();
+        reselectResources(idsOf(resources));
         String what = resources.size() == 1 ? resources.get(0).title : resources.size() + " resources";
         setStatusActivity((favorite ? "Added to" : "Removed from") + " favorites: " + what);
+    }
+
+    private void afterTagChange(List<Integer> ids, String message) {
+        refreshCategories();
+        reselectResources(ids);
+        setStatusActivity(message);
+    }
+
+    private void renameSelectedTag() {
+        String tag = tagList.getSelectedValue();
+        if (tag == null) return;
+        String input = (String) JOptionPane.showInputDialog(this, "Rename tag #" + tag + " to:",
+                "Rename Tag", JOptionPane.PLAIN_MESSAGE, null, null, tag);
+        String newName = TagDAO.normalize(input);
+        if (newName == null || newName.equals(tag)) return;
+
+        boolean merging = tagCounts.keySet().stream().anyMatch(t -> t.equalsIgnoreCase(newName) && !t.equalsIgnoreCase(tag));
+        if (merging) {
+            int opt = JOptionPane.showConfirmDialog(this,
+                    "A tag named #" + newName + " already exists.\nMerge #" + tag + " into it?",
+                    "Merge Tags", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+            if (opt != JOptionPane.YES_OPTION) return;
+        }
+
+        if (tagDAO.renameTag(tag, newName)) {
+            suppressTagEvents = true;
+            tagList.clearSelection();
+            suppressTagEvents = false;
+            refreshCategories();
+            for (int i = 0; i < tagListModel.size(); i++) {
+                if (tagListModel.get(i).equalsIgnoreCase(newName)) {
+                    tagList.setSelectedIndex(i);
+                    break;
+                }
+            }
+            setStatusActivity((merging ? "Merged #" + tag + " into #" : "Renamed tag #" + tag + " to #") + newName);
+        } else {
+            JOptionPane.showMessageDialog(this, "Failed to rename tag.", "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void deleteSelectedTag() {
+        String tag = tagList.getSelectedValue();
+        if (tag == null) return;
+        int count = tagCounts.getOrDefault(tag, 0);
+        int opt = JOptionPane.showConfirmDialog(this,
+                "Remove tag #" + tag + " from " + count + " resource(s)?\nThe resources themselves will be kept.",
+                "Delete Tag", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (opt == JOptionPane.YES_OPTION) {
+            if (tagDAO.deleteTag(tag)) {
+                refreshCategories();
+                setStatusActivity("Deleted tag #" + tag);
+            } else {
+                JOptionPane.showMessageDialog(this, "Failed to delete tag.", "Error", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
+    private void showStatistics() {
+        new StatsDialog(this, resourceDAO, categoryDAO, tagDAO).setVisible(true);
     }
 
     private void moveToCategory(List<Resource> resources, Category category) {

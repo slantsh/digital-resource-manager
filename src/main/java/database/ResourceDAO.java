@@ -6,6 +6,7 @@ import model.ResourceType;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Data Access Object for Resource entity.
@@ -32,6 +33,13 @@ public class ResourceDAO {
     }
 
     public List<Resource> filterResources(Integer categoryId, ResourceType type, String query, boolean favoritesOnly) {
+        return filterResources(categoryId, type, query, favoritesOnly, null);
+    }
+
+    /**
+     * @param tag only include resources carrying this tag (null = any)
+     */
+    public List<Resource> filterResources(Integer categoryId, ResourceType type, String query, boolean favoritesOnly, String tag) {
         List<Resource> list = new ArrayList<>();
         StringBuilder sql = new StringBuilder("SELECT id, title, description, type, location, category_id, favorite, user_id FROM resources WHERE user_id = ? ");
         List<Object> params = new ArrayList<>();
@@ -51,12 +59,26 @@ public class ResourceDAO {
             sql.append(" AND favorite = 1");
         }
 
+        if (tag != null) {
+            sql.append(" AND id IN (SELECT rt.resource_id FROM resource_tags rt JOIN tags t ON t.id = rt.tag_id"
+                    + " WHERE t.user_id = ? AND t.name = ?)");
+            params.add(userId);
+            params.add(tag);
+        }
+
         if (query != null && !query.trim().isEmpty()) {
-            sql.append(" AND (title LIKE ? OR description LIKE ? OR location LIKE ?)");
-            String pattern = "%" + query.trim() + "%";
+            // Search also matches tag names, so typing "exam" finds everything tagged #exam
+            sql.append(" AND (title LIKE ? OR description LIKE ? OR location LIKE ?"
+                    + " OR id IN (SELECT rt.resource_id FROM resource_tags rt JOIN tags t ON t.id = rt.tag_id"
+                    + " WHERE t.user_id = ? AND t.name LIKE ?))");
+            String q = query.trim();
+            String pattern = "%" + q + "%";
             params.add(pattern);
             params.add(pattern);
             params.add(pattern);
+            params.add(userId);
+            // A leading '#' searches tags only by exact-prefix, e.g. "#ex" matches #exam
+            params.add(q.startsWith("#") ? q.substring(1) + "%" : pattern);
         }
 
         sql.append(" ORDER BY id DESC;");
@@ -85,6 +107,11 @@ public class ResourceDAO {
             }
         } catch (Exception e) {
             System.err.println("Error querying resources: " + e.getMessage());
+        }
+
+        Map<Integer, List<String>> tagsByResource = new TagDAO(userId).getTagsByResource();
+        for (Resource r : list) {
+            r.tags = tagsByResource.getOrDefault(r.id, new ArrayList<>());
         }
 
         return list;
@@ -167,15 +194,20 @@ public class ResourceDAO {
 
     public boolean deleteResource(int id) {
         String sql = "DELETE FROM resources WHERE id = ? AND user_id = ?;";
+        boolean deleted;
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setInt(1, id);
             pstmt.setInt(2, userId);
-            return pstmt.executeUpdate() > 0;
+            deleted = pstmt.executeUpdate() > 0;
         } catch (SQLException e) {
             System.err.println("Error deleting resource: " + e.getMessage());
             return false;
         }
+        if (deleted) {
+            new TagDAO(userId).removeOrphans();
+        }
+        return deleted;
     }
 
     public boolean setCategory(int id, int categoryId) {

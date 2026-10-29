@@ -153,6 +153,22 @@ public class DatabaseConnection {
                 }
             }
 
+            // 4. Tags: per-user tag names, linked many-to-many with resources
+            stmt.execute("CREATE TABLE IF NOT EXISTS tags ("
+                    + "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    + "name TEXT NOT NULL COLLATE NOCASE, "
+                    + "user_id INTEGER NOT NULL, "
+                    + "FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE, "
+                    + "UNIQUE (name, user_id)"
+                    + ");");
+            stmt.execute("CREATE TABLE IF NOT EXISTS resource_tags ("
+                    + "resource_id INTEGER NOT NULL, "
+                    + "tag_id INTEGER NOT NULL, "
+                    + "PRIMARY KEY (resource_id, tag_id), "
+                    + "FOREIGN KEY (resource_id) REFERENCES resources (id) ON DELETE CASCADE, "
+                    + "FOREIGN KEY (tag_id) REFERENCES tags (id) ON DELETE CASCADE"
+                    + ");");
+
             // Ensure category General exists for default admin
             stmt.execute("INSERT OR IGNORE INTO categories (name, user_id) VALUES ('General', 1);");
 

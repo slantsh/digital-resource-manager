@@ -14,7 +14,9 @@ import java.util.Map;
  */
 public class ResourceTableModel extends AbstractTableModel {
 
-    private final String[] columnNames = {"Fav", "Type", "Title", "Category", "Location"};
+    public static final int COL_TAGS = 4;
+
+    private final String[] columnNames = {"Fav", "Type", "Title", "Category", "Tags", "Location"};
     private List<Resource> resources = new ArrayList<>();
     private Map<Integer, String> categoryNames = new HashMap<>();
 
@@ -62,6 +64,8 @@ public class ResourceTableModel extends AbstractTableModel {
             return Boolean.class;
         } else if (columnIndex == 1) {
             return ResourceType.class;
+        } else if (columnIndex == COL_TAGS) {
+            return List.class;
         }
         return String.class;
     }
@@ -84,7 +88,9 @@ public class ResourceTableModel extends AbstractTableModel {
             case 3:
                 String catName = categoryNames.get(r.categoryId);
                 return catName != null ? catName : "General";
-            case 4:
+            case COL_TAGS:
+                return r.tags;
+            case 5:
                 return r.location;
             default:
                 return "";

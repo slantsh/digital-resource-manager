@@ -1,5 +1,8 @@
 package model;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Simple Resource class without getters and setters.
  * Uses public fields directly.
@@ -13,6 +16,7 @@ public class Resource {
     public int categoryId;
     public boolean favorite;
     public int userId;
+    public List<String> tags = new ArrayList<>(); // stored in the resource_tags table
 
     public Resource(String title, String description, ResourceType type, String location, int categoryId, boolean favorite) {
         this.title = title;
